@@ -1,12 +1,30 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { Sparkles, X, Wand2, Send, User, Bot, Loader2 } from "lucide-react";
+import {
+  Sparkles,
+  X,
+  Wand2,
+  Send,
+  User,
+  Bot,
+  Loader2,
+  History,
+  Trash2,
+  ChevronRight,
+} from "lucide-react";
 
 interface Message {
   role: "user" | "assistant";
   content: string;
   action?: any;
+  timestamp: number;
+}
+
+interface SavedSession {
+  sessionId: string | null;
+  messages: Message[];
+  lastUpdated: number;
 }
 
 interface ChatResponse {
@@ -17,32 +35,116 @@ interface ChatResponse {
   action: any;
 }
 
-export function AIAssistant() {
-  const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([
+const STORAGE_KEY = "smb-ai-assistant-history";
+
+function getDefaultMessages(): Message[] {
+  return [
     {
       role: "assistant",
       content:
         "Hello! I'm your AI assistant. I can help you:\n• Plan tasks on a kanban board\n• Add new clients\n• Add employees\n• Generate contracts\n• Generate NDAs\n\nWhat would you like to do?",
+      timestamp: Date.now(),
     },
-  ]);
+  ];
+}
+
+function loadSession(): SavedSession {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as SavedSession;
+      if (parsed.messages && parsed.messages.length > 0) {
+        return parsed;
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return {
+    sessionId: null,
+    messages: getDefaultMessages(),
+    lastUpdated: Date.now(),
+  };
+}
+
+function saveSession(session: SavedSession) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(session));
+  } catch {
+    // ignore
+  }
+}
+
+function extractTasks(messages: Message[]) {
+  const tasks: { action: string; message: string; timestamp: number }[] = [];
+  for (const msg of messages) {
+    if (msg.role === "assistant" && msg.action) {
+      tasks.push({
+        action: msg.action.action || msg.action.intent || "unknown",
+        message: msg.action.message || msg.content,
+        timestamp: msg.timestamp,
+      });
+    }
+  }
+  return tasks.reverse();
+}
+
+const ACTION_LABELS: Record<string, string> = {
+  plan_tasks: "Planned tasks",
+  add_client: "Added client",
+  add_employee: "Added employee",
+  generate_contract: "Generated contract",
+  generate_nda: "Generated NDA",
+};
+
+const ACTION_COLORS: Record<string, string> = {
+  plan_tasks: "text-indigo-600",
+  add_client: "text-green-600",
+  add_employee: "text-green-600",
+  generate_contract: "text-purple-600",
+  generate_nda: "text-amber-600",
+};
+
+export function AIAssistant() {
+  const [open, setOpen] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [session, setSession] = useState<SavedSession>(loadSession);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  const messages = session.messages;
+  const sessionId = session.sessionId;
+
+  // Scroll to bottom when messages change
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages, loading]);
+  }, [messages, loading, showHistory]);
+
+  // Save to localStorage whenever session changes
+  useEffect(() => {
+    saveSession(session);
+  }, [session]);
 
   const sendMessage = async () => {
     if (!input.trim() || loading) return;
 
     const userMsg = input.trim();
     setInput("");
-    setMessages((prev) => [...prev, { role: "user", content: userMsg }]);
+
+    const userMessage: Message = {
+      role: "user",
+      content: userMsg,
+      timestamp: Date.now(),
+    };
+
+    setSession((prev) => ({
+      ...prev,
+      messages: [...prev.messages, userMessage],
+      lastUpdated: Date.now(),
+    }));
     setLoading(true);
 
     try {
@@ -56,30 +158,49 @@ export function AIAssistant() {
       });
 
       const data: ChatResponse = await res.json();
-      setSessionId(data.session_id);
 
       const assistantMsg: Message = {
         role: "assistant",
         content: data.reply,
+        timestamp: Date.now(),
       };
 
       if (data.action && !data.pending) {
         assistantMsg.action = data.action;
       }
 
-      setMessages((prev) => [...prev, assistantMsg]);
+      setSession((prev) => ({
+        sessionId: data.session_id,
+        messages: [...prev.messages, assistantMsg],
+        lastUpdated: Date.now(),
+      }));
     } catch (e) {
-      setMessages((prev) => [
+      setSession((prev) => ({
         ...prev,
-        {
-          role: "assistant",
-          content:
-            "Sorry, I couldn't connect to the AI service. Is it running on port 8000?",
-        },
-      ]);
+        messages: [
+          ...prev.messages,
+          {
+            role: "assistant",
+            content:
+              "Sorry, I couldn't connect to the AI service. Is it running on port 8000?",
+            timestamp: Date.now(),
+          },
+        ],
+        lastUpdated: Date.now(),
+      }));
     }
 
     setLoading(false);
+  };
+
+  const clearHistory = () => {
+    const fresh = {
+      sessionId: null,
+      messages: getDefaultMessages(),
+      lastUpdated: Date.now(),
+    };
+    setSession(fresh);
+    saveSession(fresh);
   };
 
   const renderActionResult = (action: any) => {
@@ -165,6 +286,8 @@ export function AIAssistant() {
     return null;
   };
 
+  const tasks = extractTasks(messages);
+
   if (!open) {
     return (
       <button
@@ -189,13 +312,76 @@ export function AIAssistant() {
             </span>
           )}
         </div>
-        <button
-          onClick={() => setOpen(false)}
-          className="text-indigo-200 hover:text-white"
-        >
-          <X className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => setShowHistory(!showHistory)}
+            className={`p-1.5 rounded-lg transition-colors ${
+              showHistory
+                ? "bg-indigo-500 text-white"
+                : "text-indigo-200 hover:text-white hover:bg-indigo-500"
+            }`}
+            title="Task history"
+          >
+            <History className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setOpen(false)}
+            className="p-1.5 text-indigo-200 hover:text-white hover:bg-indigo-500 rounded-lg transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
       </div>
+
+      {/* Task History Panel */}
+      {showHistory && (
+        <div className="border-b bg-gray-50 p-4 max-h-[200px] overflow-auto">
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+              Task History
+            </h4>
+            <button
+              onClick={clearHistory}
+              className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
+            >
+              <Trash2 className="w-3 h-3" />
+              Clear
+            </button>
+          </div>
+          {tasks.length === 0 ? (
+            <p className="text-sm text-gray-400">No tasks yet.</p>
+          ) : (
+            <ul className="space-y-2">
+              {tasks.map((task, i) => (
+                <li
+                  key={i}
+                  className="flex items-center gap-2 text-sm bg-white rounded-lg p-2 border"
+                >
+                  <ChevronRight
+                    className={`w-3 h-3 flex-shrink-0 ${
+                      ACTION_COLORS[task.action] || "text-gray-400"
+                    }`}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium text-gray-800 truncate">
+                      {ACTION_LABELS[task.action] || task.action}
+                    </p>
+                    <p className="text-xs text-gray-500 truncate">
+                      {task.message}
+                    </p>
+                  </div>
+                  <span className="text-xs text-gray-400 flex-shrink-0">
+                    {new Date(task.timestamp).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {/* Messages */}
       <div

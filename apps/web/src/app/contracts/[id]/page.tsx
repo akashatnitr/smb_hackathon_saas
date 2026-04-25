@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useParams } from "next/navigation";
 import { trpc } from "@/trpc/client";
 import {
   ArrowLeft,
@@ -13,28 +13,26 @@ import {
   User,
 } from "lucide-react";
 
-export default function ContractDetailPage({
-  params,
-}: {
-  params: { id: string };
-}) {
+export default function ContractDetailPage() {
   const router = useRouter();
+  const params = useParams();
+  const contractId = params.id as string;
   const utils = trpc.useUtils();
   const [signerName, setSignerName] = useState("");
   const [signerEmail, setSignerEmail] = useState("");
   const [showSignForm, setShowSignForm] = useState(false);
 
   const { data: contract, isLoading } = trpc.contract.get.useQuery({
-    id: params.id,
+    id: contractId,
   });
 
   const updateMutation = trpc.contract.update.useMutation({
-    onSuccess: () => utils.contract.get.invalidate({ id: params.id }),
+    onSuccess: () => utils.contract.get.invalidate({ id: contractId }),
   });
 
   const signMutation = trpc.contract.sign.useMutation({
     onSuccess: () => {
-      utils.contract.get.invalidate({ id: params.id });
+      utils.contract.get.invalidate({ id: contractId });
       setShowSignForm(false);
     },
   });
