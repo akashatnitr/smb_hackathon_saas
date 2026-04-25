@@ -75,36 +75,83 @@ class MCPAutomation:
         self._logged_in = False
         self._login_lock = asyncio.Lock()
 
+    def _parse_trpc_response(self, resp):
+        """Extract JSON data from tRPC v11 batch response."""
+        if isinstance(resp, list) and len(resp) > 0:
+            resp = resp[0]
+        if isinstance(resp, dict):
+            if "result" in resp and "data" in resp["result"]:
+                return resp["result"]["data"].get("json")
+            if "error" in resp:
+                err = resp["error"]
+                if isinstance(err, dict) and "json" in err:
+                    raise Exception(f"tRPC error: {err['json'].get('message', 'Unknown')}")
+                raise Exception(f"tRPC error: {err}")
+        return resp
+
     async def ensure_logged_in(self):
         if self._logged_in and self.page and not self.page.is_closed():
-            return
-        async with self._login_lock:
-            # Double-check after acquiring lock
-            if self._logged_in and self.page and not self.page.is_closed():
+            # Verify session is still valid with a lightweight ping
+            try:
+                await self.query("user.list", {})
                 return
+            except Exception:
+                self._logged_in = False
+        
+        async with self._login_lock:
+            if self._logged_in and self.page and not self.page.is_closed():
+                try:
+                    await self.query("user.list", {})
+                    return
+                except Exception:
+                    self._logged_in = False
+            
+            # Clean up old browser
             if self.browser:
                 await self.browser.close()
             if self.playwright:
                 await self.playwright.stop()
+            
             self.playwright = await async_playwright().start()
             self.browser = await self.playwright.chromium.launch(headless=True)
             self.page = await self.browser.new_page()
+            
+            # Navigate and login
             await self.page.goto(f"{WEB_APP_URL}/auth/signin", wait_until="networkidle")
             await self.page.fill('input[type="email"]', ADMIN_EMAIL)
             await self.page.fill('input[type="password"]', ADMIN_PASSWORD)
             await self.page.click('button[type="submit"]')
+            
+            # Wait for navigation after submit
             try:
                 await self.page.wait_for_load_state("networkidle", timeout=10000)
             except Exception:
                 pass
-            current_url = self.page.url
-            if "/auth/signin" in current_url:
+            
+            await self.page.wait_for_timeout(2000)
+            
+            # Check for session cookie
+            cookies = await self.page.context.cookies()
+            session_names = ["authjs.session-token", "next-auth.session-token"]
+            has_session = any(c["name"] in session_names for c in cookies)
+            
+            if not has_session:
                 await self.page.wait_for_timeout(3000)
+                cookies = await self.page.context.cookies()
+                has_session = any(c["name"] in session_names for c in cookies)
+            
+            if not has_session:
                 current_url = self.page.url
-                if "/auth/signin" in current_url:
-                    raise Exception(f"Login failed: still on {current_url}")
+                raise Exception(f"Login failed: no session cookie found (url: {current_url})")
+            
+            # Verify with a real API call
+            try:
+                await self.query("user.list", {})
+            except Exception as e:
+                raise Exception(f"Login verification failed: {e}")
+            
             self._logged_in = True
-            print("Playwright: Logged in")
+            print("Playwright: Logged in successfully")
 
     async def api_call(self, path: str, payload: dict):
         await self.ensure_logged_in()
@@ -138,15 +185,17 @@ class MCPAutomation:
     async def get_employees(self):
         resp = await self.query("user.list", {})
         try:
-            return resp["result"]["data"]["json"]
-        except Exception:
+            return self._parse_trpc_response(resp) or []
+        except Exception as e:
+            print(f"get_employees error: {e}")
             return []
 
     async def get_board(self, board_id: str):
         resp = await self.query("board.get", {"id": board_id})
         try:
-            return resp["result"]["data"]["json"]
-        except Exception:
+            return self._parse_trpc_response(resp)
+        except Exception as e:
+            print(f"get_board error: {e}")
             return None
 
     async def create_task(self, **kwargs):
@@ -299,11 +348,10 @@ Available roles: admin, developer, designer, marketer, general."""
     board_name = fields.get("board_name", f"AI: {prompt[:30]}")
     board_resp = await automation.create_board(board_name)
     try:
-        if isinstance(board_resp, list):
-            board_id = board_resp[0]["result"]["data"]["json"]["id"]
-        else:
-            board_id = board_resp["result"]["data"]["json"]["id"]
+        board_data = automation._parse_trpc_response(board_resp)
+        board_id = board_data["id"]
     except Exception as e:
+        print(f"Board creation error: {e}, raw: {board_resp}")
         return {"error": f"Could not create board: {e}", "plan": plan}
 
     board_data = await automation.get_board(board_id)
@@ -350,7 +398,11 @@ async def execute_add_client(fields: dict) -> dict:
         address=fields.get("address") or None,
         notes=fields.get("notes") or None,
     )
-    return {"action": "add_client", "result": resp, "message": f"Client '{name}' added successfully."}
+    try:
+        client_data = automation._parse_trpc_response(resp)
+        return {"action": "add_client", "result": client_data, "message": f"Client '{name}' added successfully."}
+    except Exception as e:
+        return {"action": "add_client", "error": str(e), "raw": resp, "message": f"Client creation failed: {e}"}
 
 
 async def execute_add_employee(fields: dict) -> dict:
@@ -371,11 +423,15 @@ async def execute_add_employee(fields: dict) -> dict:
         password=temp_password,
         role=role,
     )
-    return {
-        "action": "add_employee",
-        "result": resp,
-        "message": f"Employee '{name}' added with temporary password: {temp_password}",
-    }
+    try:
+        emp_data = automation._parse_trpc_response(resp)
+        return {
+            "action": "add_employee",
+            "result": emp_data,
+            "message": f"Employee '{name}' added with temporary password: {temp_password}",
+        }
+    except Exception as e:
+        return {"action": "add_employee", "error": str(e), "raw": resp, "message": f"Employee creation failed: {e}"}
 
 
 async def execute_generate_contract(fields: dict) -> dict:
@@ -398,11 +454,15 @@ Do NOT include any thinking, reasoning, or explanation."""
     content = content.strip()
 
     resp = await automation.create_contract(title=title, content=content)
-    return {
-        "action": "generate_contract",
-        "result": resp,
-        "message": f"Contract '{title}' generated and saved.",
-    }
+    try:
+        contract_data = automation._parse_trpc_response(resp)
+        return {
+            "action": "generate_contract",
+            "result": contract_data,
+            "message": f"Contract '{title}' generated and saved.",
+        }
+    except Exception as e:
+        return {"action": "generate_contract", "error": str(e), "raw": resp, "message": f"Contract creation failed: {e}"}
 
 
 async def execute_generate_nda(fields: dict) -> dict:
@@ -441,11 +501,15 @@ Do NOT include markdown code fences, thinking, reasoning, or explanations."""
     content = content.strip()
 
     resp = await automation.create_contract(title=title, content=content)
-    return {
-        "action": "generate_nda",
-        "result": resp,
-        "message": f"NDA '{title}' generated and saved for {client_name}.",
-    }
+    try:
+        contract_data = automation._parse_trpc_response(resp)
+        return {
+            "action": "generate_nda",
+            "result": contract_data,
+            "message": f"NDA '{title}' generated and saved for {client_name}.",
+        }
+    except Exception as e:
+        return {"action": "generate_nda", "error": str(e), "raw": resp, "message": f"NDA creation failed: {e}"}
 
 
 # ===== Required Fields =====
