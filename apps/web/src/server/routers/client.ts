@@ -24,11 +24,11 @@ export const clientsRouter = createTRPCRouter({
     .input(
       z.object({
         name: z.string().min(1),
-        email: z.string().email().optional(),
-        phone: z.string().optional(),
-        company: z.string().optional(),
-        address: z.string().optional(),
-        notes: z.string().optional(),
+        email: z.string().email().optional().nullable(),
+        phone: z.string().optional().nullable(),
+        company: z.string().optional().nullable(),
+        address: z.string().optional().nullable(),
+        notes: z.string().optional().nullable(),
       })
     )
     .mutation(async ({ ctx, input }) => {
