@@ -1,0 +1,397 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  plan        String   @default("free")
+  settings    Json     @default("{}")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  users       User[]
+  clients     Client[]
+  projects    Project[]
+  boards      Board[]
+  tasks       Task[]
+  timeEntries TimeEntry[]
+  contracts   Contract[]
+  invoices    Invoice[]
+  conversations Conversation[]
+  notifications Notification[]
+  activityLogs ActivityLog[]
+
+  @@map("organizations")
+}
+
+enum UserRole {
+  ORG_ADMIN
+  ORG_EMPLOYEE
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String?   @map("password_hash")
+  name          String?
+  image         String?
+  role          UserRole  @default(ORG_EMPLOYEE)
+  isActive      Boolean   @default(true) @map("is_active")
+  orgId         String    @map("org_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  organization    Organization   @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  assignedTasks   Task[]         @relation("AssignedTasks")
+  createdTasks    Task[]         @relation("CreatedTasks")
+  timeEntries     TimeEntry[]
+  messages        Message[]
+  conversationParts ConversationParticipant[]
+  notifications   Notification[]
+  activityLogs    ActivityLog[]
+  signatures      ContractSignature[]
+
+  @@map("users")
+}
+
+model Client {
+  id          String   @id @default(cuid())
+  name        String
+  email       String?
+  phone       String?
+  company     String?
+  address     String?
+  notes       String?
+  orgId       String   @map("org_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  projects     Project[]
+  contracts    Contract[]
+  invoices     Invoice[]
+
+  @@map("clients")
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  status      ProjectStatus @default(ACTIVE)
+  orgId       String        @map("org_id")
+  clientId    String?       @map("client_id")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  client       Client?      @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  boards       Board[]
+  tasks        Task[]
+  timeEntries  TimeEntry[]
+
+  @@map("projects")
+}
+
+enum ProjectStatus {
+  ACTIVE
+  ARCHIVED
+  COMPLETED
+}
+
+model Board {
+  id          String   @id @default(cuid())
+  name        String
+  orgId       String   @map("org_id")
+  projectId   String?  @map("project_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  columns      BoardColumn[]
+  tasks        Task[]
+
+  @@map("boards")
+}
+
+model BoardColumn {
+  id        String   @id @default(cuid())
+  name      String
+  order     Int      @default(0)
+  boardId   String   @map("board_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  board Board  @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  tasks Task[]
+
+  @@map("board_columns")
+}
+
+model Task {
+  id          String       @id @default(cuid())
+  title       String
+  description String?
+  priority    TaskPriority @default(MEDIUM)
+  labels      String[]     @default([])
+  dueDate     DateTime?    @map("due_date")
+  assigneeId  String?      @map("assignee_id")
+  creatorId   String       @map("creator_id")
+  columnId    String       @map("column_id")
+  boardId     String       @map("board_id")
+  orgId       String       @map("org_id")
+  projectId   String?      @map("project_id")
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+
+  organization  Organization  @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  board         Board         @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  column        BoardColumn   @relation(fields: [columnId], references: [id], onDelete: Cascade)
+  assignee      User?         @relation("AssignedTasks", fields: [assigneeId], references: [id], onDelete: SetNull)
+  creator       User          @relation("CreatedTasks", fields: [creatorId], references: [id], onDelete: Cascade)
+  project       Project?      @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  timeEntries   TimeEntry[]
+  comments      TaskComment[]
+
+  @@map("tasks")
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model TaskComment {
+  id        String   @id @default(cuid())
+  content   String
+  taskId    String   @map("task_id")
+  authorId  String   @map("author_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  task Task @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@map("task_comments")
+}
+
+model TimeEntry {
+  id              String    @id @default(cuid())
+  userId          String    @map("user_id")
+  taskId          String?   @map("task_id")
+  projectId       String?   @map("project_id")
+  startTime       DateTime  @map("start_time")
+  endTime         DateTime? @map("end_time")
+  durationSeconds Int?      @map("duration_seconds")
+  description     String?
+  isBillable      Boolean   @default(true) @map("is_billable")
+  orgId           String    @map("org_id")
+  createdAt       DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  task         Task?        @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@map("time_entries")
+}
+
+model Contract {
+  id          String         @id @default(cuid())
+  title       String
+  content     String
+  status      ContractStatus @default(DRAFT)
+  orgId       String         @map("org_id")
+  clientId    String?        @map("client_id")
+  createdAt   DateTime       @default(now()) @map("created_at")
+  updatedAt   DateTime       @updatedAt @map("updated_at")
+
+  organization  Organization       @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  client        Client?            @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  signatures    ContractSignature[]
+
+  @@map("contracts")
+}
+
+enum ContractStatus {
+  DRAFT
+  SENT
+  SIGNED
+  EXPIRED
+}
+
+model ContractSignature {
+  id            String    @id @default(cuid())
+  contractId    String    @map("contract_id")
+  signerEmail   String    @map("signer_email")
+  signerName    String?   @map("signer_name")
+  signedAt      DateTime? @map("signed_at")
+  ip            String?
+  signatureData String?   @map("signature_data")
+  userId        String?   @map("user_id")
+
+  contract Contract @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  user     User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("contract_signatures")
+}
+
+model Invoice {
+  id          String        @id @default(cuid())
+  number      String
+  issueDate   DateTime      @map("issue_date")
+  dueDate     DateTime      @map("due_date")
+  total       Decimal       @db.Decimal(10, 2)
+  status      InvoiceStatus @default(DRAFT)
+  orgId       String        @map("org_id")
+  clientId    String?       @map("client_id")
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+
+  organization Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  client       Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  lineItems    InvoiceLineItem[]
+
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model InvoiceLineItem {
+  id          String  @id @default(cuid())
+  description String
+  quantity    Decimal @db.Decimal(10, 2)
+  rate        Decimal @db.Decimal(10, 2)
+  amount      Decimal @db.Decimal(10, 2)
+  invoiceId   String  @map("invoice_id")
+
+  invoice Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@map("invoice_line_items")
+}
+
+enum ConversationType {
+  DIRECT
+  PROJECT
+}
+
+model Conversation {
+  id        String           @id @default(cuid())
+  type      ConversationType @default(DIRECT)
+  title     String?
+  orgId     String           @map("org_id")
+  createdAt DateTime         @default(now()) @map("created_at")
+
+  organization  Organization              @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  participants  ConversationParticipant[]
+  messages      Message[]
+
+  @@map("conversations")
+}
+
+model ConversationParticipant {
+  id              String @id @default(cuid())
+  conversationId  String @map("conversation_id")
+  userId          String @map("user_id")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@map("conversation_participants")
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String   @map("conversation_id")
+  senderId       String   @map("sender_id")
+  content        String
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String    @map("user_id")
+  type      String
+  title     String
+  body      String
+  data      Json?
+  readAt    DateTime? @map("read_at")
+  orgId     String    @map("org_id")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  orgId      String   @map("org_id")
+  userId     String?  @map("user_id")
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id")
+  meta       Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("activity_logs")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
