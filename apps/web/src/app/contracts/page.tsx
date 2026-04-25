@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { trpc } from "@/trpc/client";
-import { Plus, X, Trash2, FileText } from "lucide-react";
+import { Plus, X, Trash2, FileText, Eye } from "lucide-react";
+import Link from "next/link";
 
 export default function ContractsPage() {
   const utils = trpc.useUtils();
@@ -79,43 +80,60 @@ export default function ContractsPage() {
         {contracts?.map((contract) => (
           <div
             key={contract.id}
-            className="bg-white rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow"
+            className="bg-white rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow group"
           >
             <div className="flex items-start justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-indigo-50 rounded-lg">
+              <Link
+                href={`/contracts/${contract.id}`}
+                className="flex items-center gap-3 flex-1 min-w-0"
+              >
+                <div className="p-2 bg-indigo-50 rounded-lg group-hover:bg-indigo-100 transition-colors">
                   <FileText className="w-5 h-5 text-indigo-600" />
                 </div>
-                <div>
-                  <h3 className="font-semibold text-gray-900">{contract.title}</h3>
+                <div className="min-w-0">
+                  <h3 className="font-semibold text-gray-900 group-hover:text-indigo-700 transition-colors truncate">
+                    {contract.title}
+                  </h3>
                   <p className="text-xs text-gray-500">
                     {new Date(contract.createdAt).toLocaleDateString()}
                   </p>
                 </div>
+              </Link>
+              <div className="flex items-center gap-1 ml-2">
+                <Link
+                  href={`/contracts/${contract.id}`}
+                  className="p-2 text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-colors"
+                  title="View"
+                >
+                  <Eye className="w-4 h-4" />
+                </Link>
+                <button
+                  onClick={() => deleteMutation.mutate({ id: contract.id })}
+                  className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                  title="Delete"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
               </div>
-              <button
-                onClick={() => deleteMutation.mutate({ id: contract.id })}
-                className="text-gray-400 hover:text-red-600"
-              >
-                <Trash2 className="w-4 h-4" />
-              </button>
             </div>
-            <div className="flex items-center justify-between">
-              <span
-                className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
-                  contract.status === "SIGNED"
-                    ? "bg-green-100 text-green-700"
-                    : contract.status === "SENT"
-                    ? "bg-blue-100 text-blue-700"
-                    : "bg-gray-100 text-gray-700"
-                }`}
-              >
-                {contract.status}
-              </span>
-              {contract.client && (
-                <span className="text-xs text-gray-500">{contract.client.name}</span>
-              )}
-            </div>
+            <Link href={`/contracts/${contract.id}`} className="block">
+              <div className="flex items-center justify-between">
+                <span
+                  className={`inline-flex px-2 py-1 rounded-full text-xs font-medium ${
+                    contract.status === "SIGNED"
+                      ? "bg-green-100 text-green-700"
+                      : contract.status === "SENT"
+                      ? "bg-blue-100 text-blue-700"
+                      : "bg-gray-100 text-gray-700"
+                  }`}
+                >
+                  {contract.status}
+                </span>
+                {contract.client && (
+                  <span className="text-xs text-gray-500">{contract.client.name}</span>
+                )}
+              </div>
+            </Link>
           </div>
         ))}
         {contracts?.length === 0 && (
