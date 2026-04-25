@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from playwright.async_api import async_playwright, Page
 
@@ -44,18 +45,55 @@ class MCPAutomation:
         self.page: Optional[Page] = None
         self.playwright = None
         self.browser = None
+        self._logged_in = False
 
     async def ensure_logged_in(self):
-        if self.page is None:
-            self.playwright = await async_playwright().start()
-            self.browser = await self.playwright.chromium.launch(headless=True)
-            self.page = await self.browser.new_page()
-            await self.page.goto(f"{WEB_APP_URL}/auth/signin")
-            await self.page.fill('input[type="email"]', ADMIN_EMAIL)
-            await self.page.fill('input[type="password"]', ADMIN_PASSWORD)
-            await self.page.click('button[type="submit"]')
-            await self.page.wait_for_url("**/dashboard")
-            print("Playwright: logged in")
+        if self._logged_in and self.page and not self.page.is_closed():
+            return
+        
+        # Clean up old session if exists
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
+        
+        self.playwright = await async_playwright().start()
+        self.browser = await self.playwright.chromium.launch(headless=True)
+        self.page = await self.browser.new_page()
+        
+        print("Playwright: Navigating to signin...")
+        await self.page.goto(f"{WEB_APP_URL}/auth/signin", wait_until="networkidle")
+        
+        print("Playwright: Filling credentials...")
+        await self.page.fill('input[type="email"]', ADMIN_EMAIL)
+        await self.page.fill('input[type="password"]', ADMIN_PASSWORD)
+        
+        print("Playwright: Submitting form...")
+        await self.page.click('button[type="submit"]')
+        
+        # Wait for navigation after submit - don't be strict about URL
+        try:
+            await self.page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+        
+        # Check if login succeeded by looking for dashboard content or sidebar
+        current_url = self.page.url
+        print(f"Playwright: Current URL after login: {current_url}")
+        
+        if "/auth/signin" in current_url:
+            # Maybe there's an error message
+            error_text = await self.page.locator("text=Invalid").is_visible()
+            if error_text:
+                raise Exception("Login failed: Invalid credentials")
+            # Try waiting a bit more
+            await self.page.wait_for_timeout(3000)
+            current_url = self.page.url
+            if "/auth/signin" in current_url:
+                raise Exception(f"Login failed: still on signin page. URL: {current_url}")
+        
+        self._logged_in = True
+        print("Playwright: Login successful")
 
     async def api_call(self, path: str, payload: dict):
         await self.ensure_logged_in()
@@ -114,6 +152,7 @@ class MCPAutomation:
         return await self.api_call("board.create", {"name": name})
 
     async def close(self):
+        self._logged_in = False
         if self.browser:
             await self.browser.close()
         if self.playwright:
@@ -123,10 +162,40 @@ class MCPAutomation:
 automation = MCPAutomation()
 app = FastAPI(title="SMB Flow MCP Automation")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 @app.on_event("shutdown")
 async def shutdown():
     await automation.close()
+
+
+SYSTEM_PROMPT = """You are an AI project manager assistant. Your job is to take a user's natural language request and break it down into concrete tasks for a Kanban board.
+
+Given a request like "Plan me an event" or "Build a website for a client", you should:
+1. Break it down into 5-10 specific, actionable tasks
+2. For each task, suggest a priority (LOW, MEDIUM, HIGH, URGENT) and who should do it based on role
+3. Output ONLY valid JSON in this exact format:
+
+{
+  "tasks": [
+    {
+      "title": "Task name",
+      "description": "Detailed description",
+      "priority": "MEDIUM",
+      "role": "designer"
+    }
+  ]
+}
+
+Available roles: admin, developer, designer, marketer, general.
+Keep descriptions concise but actionable."""
 
 
 def rule_based_planner(prompt: str) -> dict:
@@ -241,20 +310,27 @@ async def plan_tasks(req: PlanRequest):
     # Get or create board
     board_id = req.board_id
     if not board_id:
-        board_resp = await automation.create_board(f"Auto: {req.prompt[:30]}")
         try:
-            # Batch responses are arrays
-            if isinstance(board_resp, list):
+            board_resp = await automation.create_board(f"Auto: {req.prompt[:30]}")
+            print(f"Board create raw response: {json.dumps(board_resp)[:500]}")
+            if isinstance(board_resp, list) and len(board_resp) > 0:
                 board_id = board_resp[0]["result"]["data"]["json"]["id"]
-            else:
+            elif isinstance(board_resp, dict) and "result" in board_resp:
                 board_id = board_resp["result"]["data"]["json"]["id"]
+            else:
+                return {"error": f"Unexpected board create response: {type(board_resp)}", "plan": plan}
         except Exception as e:
             return {"error": f"Could not create board: {str(e)}", "plan": plan}
 
     # Fetch board columns
-    board_data = await automation.get_board(board_id)
+    try:
+        board_data = await automation.get_board(board_id)
+        print(f"Board get raw response: {json.dumps(board_data)[:500] if board_data else 'None'}")
+    except Exception as e:
+        return {"error": f"Could not fetch board: {str(e)}", "plan": plan}
+    
     if not board_data:
-        return {"error": "Could not fetch board", "plan": plan}
+        return {"error": "Board data is empty", "plan": plan}
 
     columns = board_data.get("columns", [])
     if not columns:
