@@ -23,7 +23,7 @@ export function AIAssistant() {
     {
       role: "assistant",
       content:
-        "Hello! I'm your AI assistant. I can help you:\n• Plan tasks on a kanban board\n• Add new clients\n• Add employees\n• Generate contracts\n\nWhat would you like to do?",
+        "Hello! I'm your AI assistant. I can help you:\n• Plan tasks on a kanban board\n• Add new clients\n• Add employees\n• Generate contracts\n• Generate NDAs\n\nWhat would you like to do?",
     },
   ]);
   const [input, setInput] = useState("");
@@ -146,6 +146,22 @@ export function AIAssistant() {
       );
     }
 
+    if (action.action === "generate_nda") {
+      return (
+        <div className="mt-2 bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm">
+          <p className="font-medium text-amber-800">
+            NDA generated successfully!
+          </p>
+          {action.message && (
+            <p className="text-amber-700 text-xs mt-1">{action.message}</p>
+          )}
+          <p className="text-amber-600 text-xs mt-1">
+            You can view and send it from the Contracts tab.
+          </p>
+        </div>
+      );
+    }
+
     return null;
   };
 
@@ -255,8 +271,8 @@ export function AIAssistant() {
           </button>
         </div>
         <p className="text-xs text-gray-400 mt-2">
-          Try: "Plan an event", "Add client John", "Generate a contract for
-          design services"
+          Try: "Plan an event", "Add client John", "Generate a contract",
+          "Generate an NDA for Bubu"
         </p>
       </div>
     </div>

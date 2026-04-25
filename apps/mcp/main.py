@@ -243,6 +243,7 @@ Available intents:
 - add_client: User wants to add a new client/contact
 - add_employee: User wants to add a new employee/team member
 - generate_contract: User wants to generate a contract/document
+- generate_nda: User wants to generate a Non-Disclosure Agreement (NDA)
 - unknown: None of the above
 
 Output ONLY valid JSON:
@@ -251,6 +252,7 @@ Output ONLY valid JSON:
 For add_client, fields can be: name, email, phone, company, address, notes
 For add_employee, fields can be: name, email, role (ORG_ADMIN or ORG_EMPLOYEE)
 For generate_contract, fields can be: title, content, client_name
+For generate_nda, fields can be: title, client_name, company_name, purpose
 For plan_tasks, fields can be: prompt, board_name"""
 
     response = generate_text(system, f"User message: {message}", max_tokens=512)
@@ -403,11 +405,55 @@ Do NOT include any thinking, reasoning, or explanation."""
     }
 
 
+async def execute_generate_nda(fields: dict) -> dict:
+    title = fields.get("title")
+    if not title:
+        return {"action": "generate_nda", "missing": ["title"], "message": "What should the NDA be titled?"}
+    
+    client_name = fields.get("client_name", "the Recipient")
+    company_name = fields.get("company_name", "Bubu Inc.")
+    purpose = fields.get("purpose", "business discussions and evaluation of potential opportunities")
+    
+    system = f"""You are a legal assistant specializing in confidentiality agreements. Generate a professional Non-Disclosure Agreement (NDA).
+
+NDA Title: {title}
+Disclosing Party: {company_name} ("the Company")
+Receiving Party: {client_name} ("the Recipient")
+Purpose: {purpose}
+
+Generate a complete, legally sound NDA with these sections:
+1. Parties to the Agreement
+2. Definition of Confidential Information
+3. Obligations of the Receiving Party
+4. Term of Agreement (typically 2-3 years)
+5. Return of Information
+6. No License or Transfer of Rights
+7. Governing Law
+8. Signature Blocks for both parties
+
+Output ONLY the NDA text in clean HTML format using basic tags: <h1>, <h2>, <p>, <ul>, <li>, <strong>, <em>.
+Do NOT include markdown code fences, thinking, reasoning, or explanations."""
+    
+    content = generate_text(system, "Generate the full NDA text.", max_tokens=2048)
+    # Clean up any remaining markdown
+    content = re.sub(r"```html\s*", "", content)
+    content = re.sub(r"```\s*", "", content)
+    content = content.strip()
+
+    resp = await automation.create_contract(title=title, content=content)
+    return {
+        "action": "generate_nda",
+        "result": resp,
+        "message": f"NDA '{title}' generated and saved for {client_name}.",
+    }
+
+
 # ===== Required Fields =====
 REQUIRED_FIELDS = {
     "add_client": ["name"],
     "add_employee": ["name", "email"],
     "generate_contract": ["title"],
+    "generate_nda": ["title"],
     "plan_tasks": [],
 }
 
@@ -415,6 +461,9 @@ FIELD_QUESTIONS = {
     "name": "What is the name?",
     "email": "What is the email address?",
     "title": "What should the title be?",
+    "client_name": "What is the client's name?",
+    "company_name": "What is the company name?",
+    "purpose": "What is the purpose of the NDA (e.g., product discussion, partnership)?",
 }
 
 
@@ -483,6 +532,8 @@ async def chat(req: ChatRequest):
             result = await execute_add_employee(pending)
         elif intent == "generate_contract":
             result = await execute_generate_contract(pending)
+        elif intent == "generate_nda":
+            result = await execute_generate_nda(pending)
         else:
             result = {"error": "Unknown intent"}
         
@@ -512,7 +563,7 @@ async def chat(req: ChatRequest):
     if intent == "unknown":
         return {
             "session_id": sid,
-            "reply": "I can help you with:\n• Planning tasks on a kanban board\n• Adding clients\n• Adding employees\n• Generating contracts\n\nWhat would you like to do?",
+            "reply": "I can help you with:\n• Planning tasks on a kanban board\n• Adding clients\n• Adding employees\n• Generating contracts\n• Generating NDAs\n\nWhat would you like to do?",
             "pending": False,
             "intent": None,
             "action": None,
@@ -539,6 +590,8 @@ async def chat(req: ChatRequest):
         result = await execute_add_employee(fields)
     elif intent == "generate_contract":
         result = await execute_generate_contract(fields)
+    elif intent == "generate_nda":
+        result = await execute_generate_nda(fields)
     else:
         result = {"error": "Unknown intent"}
     
